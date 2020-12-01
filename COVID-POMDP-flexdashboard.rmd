@@ -1,0 +1,659 @@
+---
+title: "Uncertainty Decision Guide for when there's community COVID-19 transmission: Post (regular duties), Test or Isolate?"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: rows
+    vertical_layout: scroll
+editor_options: 
+  chunk_output_type: console
+runtime: shiny_prerendered 
+---
+
+```{r, include=FALSE, message=FALSE, context="setup"}
+library(pomdp)
+library(igraph)
+library(knitr)
+library(Ternary)
+library(RColorBrewer)
+library(reshape2)
+library(visNetwork)
+library(shiny)
+library(promises)
+library(future)
+library(flexdashboard)
+library(shinyjs)
+library(colorspace)
+plan(multiprocess)
+library(colorspace)
+
+```
+
+# Policy graph 
+
+Column {.sidebar data-width=370}
+-------------------------------------
+
+### Controls for policy graph
+
+> Click Run POMDP then select the number of observations (allot one observation per day leading up to today). For each day, first choose the observation from the dropdown, then click Update graph. The recommended action is the label of the centre node in the policy graph.
+
+```{r, echo=FALSE, context="render"}
+
+#> Rewards Control Settings
+actionButton(inputId = "OK", label = "Run POMPD (may take a while)")
+useShinyjs(rmd = TRUE)
+#> Policy Graph Control Settings
+disabled(
+selectInput(inputId = "daysago", label = "Number of observations", choices = c(1, 2, 3, 4, 5, 6, 7))
+)
+disabled(
+selectInput(inputId = "seledges", label = "Observation selection", choices = c("Select observation" = ""), selected = "")
+)
+disabled(
+actionButton(inputId = "MakePlot", label = "Update graph")
+)
+
+#> Observations remaining
+valueBoxOutput("clicksleft")
+
+```
+
+```{r, context="server"}
+
+rwdPost1 <- eventReactive(input$OK, {input$RwdPost1_ui})
+rwdTest1 <- eventReactive(input$OK, {input$RwdTest1_ui})
+rwdIsolate2 <- eventReactive(input$OK, {input$RwdIsolate2_ui})
+rwdTest2 <- eventReactive(input$OK, {input$RwdTest2_ui})
+pInf <- eventReactive(input$OK, {input$pInf_ui})
+pFalseSym <- eventReactive(input$OK, {input$pFalseSym_ui})
+numCont <- eventReactive(input$OK, {input$numCont_ui})
+pContTrace <- eventReactive(input$OK, {input$pContTrace_ui})
+observeEvent(input$RwdPost1_ui,{
+    updateSliderInput(session, "RwdTest1_ui", min = 0, max = input$RwdPost1_ui, step = 1)
+})
+observeEvent(input$RwdIsolate2_ui,{
+    updateSliderInput(session, "RwdTest2_ui", min = 0, max = input$RwdIsolate2_ui, step = 1)
+})
+
+```
+
+Row {data-height=400}
+-----------------------------------------------------------------------
+
+```{r, echo=FALSE}
+
+visNetworkOutput("fullnetwork", height = "400px")
+
+```
+
+```{r, context="server"}
+N <- 23
+  #Used for Progress Bar
+  nclicks <- reactiveVal(0)
+  output$fullnetwork <- renderVisNetwork ( {
+  graph_result_val()
+  })
+  output$clicksleft <- renderValueBox({valueBox(paste(as.numeric(input$daysago) - nclicks(), "remaining", sep = " ") , icon = icon("fa-calculator"))})
+  output$posthealthygauge <- renderGauge({gauge(input$RwdPost1_ui, min = 0, max = 100, label = "Post Healthy", abbreviate = FALSE,  gaugeSectors(
+  success = c(0, 33), warning = c(33, 66), danger = c(66, 100)
+))})
+output$numCont <- renderGauge({gauge(input$numCont_ui, min = 5, max = 30, label = "Contacts", abbreviate = FALSE,  gaugeSectors(
+  danger = c(5, 15), warning = c(15, 20), success = c(20, 30)
+))})
+  output$pContTrace <- renderGauge({gauge(100*input$pContTrace_ui, min = 25, max = 75, label = "Effectiveness", abbreviate = FALSE,  symbol = "%", gaugeSectors(
+  danger = c(25, 41.66), warning = c(41.66, 58.33), success = c(58.33, 75)
+))})
+  output$inf <- renderGauge({gauge(100*input$pInf_ui, min = 0, max = 2, label = "Prob. Infection", abbreviate = FALSE,  symbol = "%", gaugeSectors(
+  success = c(0, 0.66), warning = c(0.66, 1.33), danger = c(1.33, 2)
+))})
+  output$false <- renderGauge({gauge(100*input$pFalseSym_ui, min = 0, max = 5, label = "Prob. False Symptoms", abbreviate = FALSE,  symbol = "%", gaugeSectors(
+  success = c(0, 1.66), warning = c(1.66, 3.33), danger = c(3.33, 5)
+))})
+  output$testhealthygauge <- renderGauge({gauge(input$RwdTest1_ui, min = 0, max = input$RwdPost1_ui, label = "Test Healthy", abbreviate = FALSE, gaugeSectors(
+  danger = c(0, 0.33*input$RwdPost1_ui), warning = c(0.33*input$RwdPost1_ui, 0.66*input$RwdPost1_ui), success = c(0.66*input$RwdPost1_ui, input$RwdPost1_ui)
+))})
+  output$testinfectedgauge <- renderGauge({gauge(input$RwdTest2_ui, min = 0, max = input$RwdIsolate2_ui, label = "Test Infected", abbreviate = FALSE,  gaugeSectors(
+  danger = c(0, 0.33*input$RwdIsolate2_ui), warning = c(0.33*input$RwdIsolate2_ui, 0.66*input$RwdIsolate2_ui), success = c(0.66*input$RwdIsolate2_ui, input$RwdIsolate2_ui)
+))})
+  output$isolateinfectedgauge <- renderGauge({gauge(input$RwdIsolate2_ui, min = 0, max = 100, label = "Isolate Infected", abbreviate = FALSE,  gaugeSectors(
+  success = c(0, 33), warning = c(33, 66), danger = c(66, 100)
+))})
+  graph_result_val <- reactiveVal()
+  observeEvent(input$MakePlot,{
+    updateActionButton(session, "MakePlot", label = "Update graph")
+    enable("seledges")
+    graph_result_val(NULL)
+    graph_result_val({
+      pg <- policy_graph(POMDP_result_val())
+      V(pg)$name <- vertex_attr(pg)$label
+      E(pg)$name <- paste(1:length(E(pg)), abbreviate(edge_attr(pg)$label))
+      edge_attr(pg)$label <- abbreviate(edge_attr(pg)$label)
+      vertex_attr(pg)$label <- matrix(unlist(strsplit(vertex_attr(pg)$label, "\n")), ncol = 2, byrow = TRUE)[,2]
+      V(pg)$color <- lighten(sapply(seq(length(V(pg))), FUN = function(i)
+        grDevices::rgb(t(grDevices::col2rgb(V(pg)$pie.color[[1]])
+                         %*% V(pg)$pie[[i]])/255.001)), 0.18)
+      if (input$seledges == "") {
+        initialNode <- POMDP_result_val()$solution$initial_pg_node
+        initialNodeName <- V(pg)[initialNode]$name
+      } else {
+        initialNode <- V(pg)[input$seledges]
+        initialNodeName <- V(pg)[initialNode]$name
+        nclicks(nclicks() + 1)
+        if (nclicks() == input$daysago) {
+          disable("seledges")
+          disable("MakePlot")
+        } else {
+          enable("seledges")
+          enable("MakePlot")
+        }
+      }
+      for (nod in 1:length(V(pg))) {
+        V(pg)[nod]$title <- paste(V(pg)[nod]$label, knitr::kable(cbind(belief = V(pg)$pie[[nod]][V(pg)$pie[[nod]] > 0]), digits = 3, format = "html")) }
+      pg <- make_ego_graph(pg, order = 1,
+                           nodes = initialNode, 
+                           mode = "out")[[1]]
+      rm_edg <- NULL
+      for (edg in E(pg)) {
+        if (!(tail_of(pg, edg)$name == initialNodeName)) rm_edg <- append(rm_edg, edg)
+        }
+      pg <- pg - edge(rm_edg)
+      edgelabels <- paste(ifelse(E(pg)$label == "NA", "No change during day", ifelse(E(pg)$label == "DS", "Developing Symptoms", ifelse(E(pg)$label == "PS", "Persisting Symptoms", ifelse(E(pg)$label == "WS", "Worsening Symptoms", ifelse(E(pg)$label == "LS", "Lessening Symptoms", ifelse(E(pg)$label == "PE", "Potential Exposure", ifelse(E(pg)$label == "Pos", "Positive", "Negative"))))))), " (", E(pg)$label, ")", sep = "")
+      choicesarray <- c("", head_of(pg, E(pg))$name)
+      names(choicesarray) <- c("Select observation", edgelabels)
+      if (any_multiple(pg)) {
+        pglab <- simplify(pg, remove.loops = F, remove.multiple = T, edge.attr.comb = "concat")
+        mylab <- NULL
+        for (cmbnedg in 1:length(E(pglab)$label)) {
+          mystr <- NULL
+          mystr <- paste(mystr, E(pglab)$label[[cmbnedg]][1], sep = "")
+          if (length(E(pglab)$label[[cmbnedg]]) > 1) {
+            for (edg in 2:length(E(pglab)$label[[cmbnedg]])) {
+              mystr <- paste(mystr, E(pglab)$label[[cmbnedg]][edg], sep = " or ")
+            }
+          }
+          mylab <- append(mylab, mystr)
+        }
+        choicesarray <- c("", head_of(pglab, E(pglab))$name)
+        names(choicesarray) <- c("Select observation", mylab)
+        updateSelectInput(session, "seledges", choices = choicesarray) 
+        
+        visNetwork::visIgraph(pg, idToLabel = FALSE, smooth = smooth) %>%
+        visLegend(useGroups = FALSE, main = "Edge legend (observations)",
+                  addEdges = data.frame(label = c("No change\nduring day (NA)", "Developing\nSymptoms (DS)\nPersisting\nSymptoms (PS)\nWorsening\nSymptoms (WS)\nLessening\nSymptoms (LS)", "Potential\nExposure (PE)", "Positive (Pos)\n/Negative (Neg)\ntest results"), color = 'rgba(0,0,0,0)')) %>%
+        visEdges( font = list(size = 12, vadjust = 0)) %>%
+        visNetwork::visOptions(highlightNearest = list(enabled = TRUE, degree = 0),
+                               nodesIdSelection = FALSE, ) %>%
+        visLayout(randomSeed = 123, improvedLayout = TRUE) %>%
+        visPhysics(solver = "barnesHut", barnesHut = list(gravitationalConstant = -2000)) %>%
+        visInteraction(tooltipDelay = 915, navigationButtons = FALSE, tooltipStyle = 'position: fixed;visibility:hidden;padding: 5px;white-space: nowrap;
+      font-family: cursive;font-size:18px;font-color:purple;background-color: red;')
+      } else {
+      updateSelectInput(session, "seledges", choices = choicesarray) 
+      visNetwork::visIgraph(pg, idToLabel = FALSE, smooth = smooth) %>%
+      visEdges( font = list(size = 12, vadjust = 0)) %>%
+      visNetwork::visOptions(highlightNearest = list(enabled = TRUE, degree = 0),
+                             nodesIdSelection = FALSE, ) %>%
+      visLayout(randomSeed = 123, improvedLayout = TRUE) %>%
+      visPhysics(solver = "barnesHut", barnesHut = list(gravitationalConstant = -2000)) %>%
+      visInteraction(tooltipDelay = 915, navigationButtons = FALSE, tooltipStyle = 'position: fixed;visibility:hidden;padding: 5px;white-space: nowrap;
+    font-family: cursive;font-size:18px;font-color:purple;background-color: red;')
+      }
+    })
+  })
+  observe({
+    edges_selection <- input$seledges
+    visNetworkProxy("fullnetwork") %>%
+    visFocus(id = edges_selection)
+    if (input$seledges != "") {
+      enable("MakePlot")
+    } else if (nclicks() == input$daysago) {
+          disable("seledges")
+          disable("MakePlot")
+        }
+    if (nclicks() > 0) {
+      disable("daysago")    
+    }
+  })
+  POMDP_result_val <- reactiveVal()
+  observeEvent(input$OK,{ 
+    graph_result_val(NULL)
+    POMDP_result_val(NULL)
+    nclicks(0)
+    withProgress(message = 'Calculation in progress', {
+      for(i in 1:N){
+        # Long Running Task
+        Sys.sleep(0.6)
+        # Update progress
+        incProgress(1/N)
+      }
+      POMDP_result_val( {
+        rwdIsolate1 <- 0
+        rwdPost2 <- 0
+        #################Transition Probabilities and Probabilities of Observations
+        pPosE <- 0.6  #what probability do you have a positive Test result for someone who has 
+                      #recently been exposed and not yet completed incubation?
+        pPosI <- 0.97 #what probability do you have a positive Test result for someone who has
+                      #COVID-19 for 2 or more days?
+        pFalsePosS <- 0.01 #what probability do you have a (false) positive Test result 
+                            #for someone who 
+                           #does not have COVID-19 but has also never had COVID-19?
+        pFalsePosR <- 0.25 #what probability do you have a (false) positive Test result 
+                            #for someone who
+                           #has had COVID-19 but has recovered?
+        ############## Likely   Often   Sometimes   Seldom    Unlikely
+        #Note this is made up
+        #To make a better POMDP, collection of regional data would be completed 
+        #The POMDP tool could collect its own data 
+        #PE would be the most difficult to collect as it depends on the Contact tracing effort
+        #level, success and prevalence, 
+        Likely <- 0.85
+        Often <- 0.55
+        Sometimes <- 0.3
+        Seldom <- 0.15
+        Unlikely <- 0.025
+        O_S_NA <- Likely            
+        O_S_PE <- 1 - pContTrace() 
+        O_S_LS <- pFalseSym()
+        O_S_PS <- pFalseSym()   
+        O_S_DS <- pFalseSym()
+        O_S_WS <- pFalseSym()/2
+        O_PE_NA <- 1 - pContTrace()
+        O_PE_PE <- Likely
+        O_PE_LS <- pFalseSym()
+        O_PE_PS <- pFalseSym() 
+        O_PE_DS <- pFalseSym()
+        O_PE_WS <- pFalseSym()/2 
+        O_E_NA <- Often                                 
+        O_E_PE <- pContTrace()  
+        O_E_LS <- pFalseSym()
+        O_E_PS <- pFalseSym()
+        O_E_DS <- Unlikely
+        O_E_WS <- pFalseSym()/2 
+        O_Inc1_NA <- Often                    
+        O_Inc1_PE <- pContTrace()
+        O_Inc1_LS <- pFalseSym()
+        O_Inc1_PS <- pFalseSym()
+        O_Inc1_DS <- Unlikely
+        O_Inc1_WS <- pFalseSym()/2 
+        O_Inc2_NA <- Often
+        O_Inc2_PE <- pContTrace()
+        O_Inc2_LS <- pFalseSym()
+        O_Inc2_PS <- pFalseSym()
+        O_Inc2_DS <- Unlikely
+        O_Inc2_WS <- pFalseSym()/2 
+        O_InfP_NA <- Often
+        O_InfP_PE <- (1 - (1 - pInf())^numCont() + pContTrace())/2
+        O_InfP_LS <- pFalseSym()
+        O_InfP_PS <- pFalseSym()
+        O_InfP_DS <- Seldom
+        O_InfP_WS <- pFalseSym()/2 
+        #After presymptomatic period (Exposed, Incubation1 & 2 and Infectious-Presymptomatic)
+        #The basic tendency is people start to feel symptoms so the NA becomes rare 
+        O_InfS1_NA <- Sometimes
+        O_InfS1_PE <- 1 - (1 - pInf())^numCont()  
+        O_InfS1_LS <- Unlikely
+        O_InfS1_PS <- Unlikely
+        O_InfS1_DS <- Often
+        O_InfS1_WS <- Seldom 
+        O_InfS2_NA <- Sometimes 
+        O_InfS2_PE <- 1 - (1 - pInf())^numCont() 
+        O_InfS2_LS <- Unlikely
+        O_InfS2_PS <- Often
+        O_InfS2_DS <- Seldom
+        O_InfS2_WS <- Seldom 
+        O_InfS3_NA <- Sometimes  
+        O_InfS3_PE <- 1 - (1 - pInf())^numCont() 
+        O_InfS3_LS <- Unlikely
+        O_InfS3_PS <- Often
+        O_InfS3_DS <- Unlikely
+        O_InfS3_WS <- Sometimes
+        
+        O_InfS4_NA <- Sometimes
+        O_InfS4_PE <- 1 - (1 - pInf())^numCont() 
+        O_InfS4_LS <- Sometimes
+        O_InfS4_PS <- Often
+        O_InfS4_DS <- Unlikely
+        O_InfS4_WS <- Seldom 
+        O_R_NA <- Likely
+        O_R_PE <- 1 - pContTrace()  
+        O_R_LS <- (Often + pFalseSym())/2
+        O_R_PS <- pFalseSym()    
+        O_R_DS <- pFalseSym()
+        O_R_WS <- pFalseSym()/2        
+#There's one observation vector for every state
+        ObsS <- round_stochastic(c(O_S_NA, O_S_DS, O_S_PS, O_S_WS, O_S_LS, O_S_PE, 0, 0)/sum(
+          c(O_S_NA, O_S_DS, O_S_PS, O_S_WS, O_S_LS, O_S_PE, 0, 0)), digits = 3)
+        ObsPE <- round_stochastic(c(O_PE_NA, O_PE_DS, O_PE_PS, O_PE_WS, O_PE_LS, O_PE_PE, 0, 0)/sum(
+  c(O_PE_NA, O_PE_DS, O_PE_PS, O_PE_WS, O_PE_LS, O_PE_PE, 0, 0)), digits = 3)
+        ObsE <- round_stochastic(c(O_E_NA, O_E_DS, O_E_PS, O_E_WS, O_E_LS, O_E_PE, 0, 0)/sum(
+          c(O_E_NA, O_E_DS, O_E_PS, O_E_WS, O_E_LS, O_E_PE, 0, 0)), digits = 3)
+        ObsInc1 <- round_stochastic(c(O_Inc1_NA, O_Inc1_DS, O_Inc1_PS, 
+                                      O_Inc1_WS, O_Inc1_LS, O_Inc1_PE, 0, 0)/sum(
+          c(O_Inc1_NA, O_Inc1_DS, O_Inc1_PS, O_Inc1_WS, O_Inc1_LS, O_Inc1_PE, 0, 0)), digits = 3)
+        ObsInc2 <- round_stochastic(c(O_Inc2_NA, O_Inc2_DS, O_Inc2_PS, 
+                                      O_Inc2_WS, O_Inc2_LS, O_Inc2_PE, 0, 0)/sum(
+          c(O_Inc2_NA, O_Inc2_DS, O_Inc2_PS, O_Inc2_WS, O_Inc2_LS, O_Inc2_PE, 0, 0)), digits = 3)
+        ObsInfP <- round_stochastic(c(O_InfP_NA, O_InfP_DS, O_InfP_PS, 
+                                      O_InfP_WS, O_InfP_LS, O_InfP_PE, 0, 0)/sum(
+          c(O_InfP_NA, O_InfP_DS, O_InfP_PS, O_InfP_WS, O_InfP_LS, O_InfP_PE, 0, 0)), digits = 3)
+        ObsInfS1 <- round_stochastic(c(O_InfS1_NA, O_InfS1_DS, O_InfS1_PS, 
+                                       O_InfS1_WS, O_InfS1_LS, O_InfS1_PE, 0, 0)/sum(
+          c(O_InfS1_NA, O_InfS1_DS, O_InfS1_PS, O_InfS1_WS, O_InfS1_LS, O_InfS1_PE, 0, 0)), digits = 3)
+        ObsInfS2 <- round_stochastic(c(O_InfS2_NA, O_InfS2_DS, O_InfS2_PS, 
+                                       O_InfS2_WS, O_InfS2_LS, O_InfS2_PE, 0, 0)/sum(
+          c(O_InfS2_NA, O_InfS2_DS, O_InfS2_PS, O_InfS2_WS, O_InfS2_LS, O_InfS2_PE, 0, 0)), digits = 3)
+        ObsInfS3 <- round_stochastic(c(O_InfS3_NA, O_InfS3_DS, O_InfS3_PS, 
+                                       O_InfS3_WS, O_InfS3_LS, O_InfS3_PE, 0, 0)/sum(
+          c(O_InfS3_NA, O_InfS3_DS, O_InfS3_PS, O_InfS3_WS, O_InfS3_LS, O_InfS3_PE, 0, 0)), digits = 3)
+        ObsInfS4 <- round_stochastic(c(O_InfS4_NA, O_InfS4_DS, O_InfS4_PS, 
+                                       O_InfS4_WS, O_InfS4_LS, O_InfS4_PE, 0, 0)/sum(
+          c(O_InfS4_NA, O_InfS4_DS, O_InfS4_PS, O_InfS4_WS, O_InfS4_LS, O_InfS4_PE, 0, 0)), digits = 3)
+        ObsR <- round_stochastic(c(O_R_NA, O_R_DS, O_R_PS, O_R_WS, O_R_LS, O_R_PE, 0, 0)/sum(
+          c(O_R_NA, O_R_DS, O_R_PS, O_R_WS, O_R_LS, O_R_PE, 0, 0)), digits = 3)
+        COVID_POMDP <- POMDP(
+          name = "Emile's COVID POMDP",
+          discount = 0.94,
+          observations = c("NA", "DS", "PS", "WS", "LS", "PE", "Pos", "Neg"),
+          actions = c("Test", "Post", "Isolate"),
+          states = c("Susceptible", "Potentially_Exposed", "Exposed", "Incubation_1_of_2", "Incubation_2_of_2", "Infectious_pre_symptomatic", "Infectious_asym_sym_1_of_4", "Infectious_asym_sym_2_of_4", "Infectious_asym_sym_3_of_4", "Infectious_asym_sym_4_of_4", "Recovered"),
+          horizon = Inf,          
+          start = round_stochastic(
+                c((1 - pInf())^5, 0, (1 - (1 - pInf())^5)/12, (1 - (1 - pInf())^5)/6, 
+                  (1 - (1 - pInf())^5)/6, (1 - (1 - pInf())^5)/6, 
+                  (1 - (1 - pInf())^5)/12, (1 - (1 - pInf())^5)/12, 
+                  (1 - (1 - pInf())^5)/12, (1 - (1 - pInf())^5)/12, 
+                  (1 - (1 - pInf())^5)/12)/
+                  sum(c((1 - pInf())^5, (1 - (1 - pInf())^5)/12, 
+                  (1 - (1 - pInf())^5)/6, (1 - (1 - pInf())^5)/6, 
+                  (1 - (1 - pInf())^5)/6, (1 - (1 - pInf())^5)/12, 
+                  (1 - (1 - pInf())^5)/12, (1 - (1 - pInf())^5)/12, 
+                  (1 - (1 - pInf())^5)/12, (1 - (1 - pInf())^5)/12)), digits = 3),
+          #T_(action = "*", start.state = "*", end.state = "*", probability) 
+          transition_prob = list(
+            "Test" = rbind(
+              round_stochastic(c((1 - pInf())^numCont() - pInf(),  1 - (1 - pInf())^numCont(), pInf(),    0,    0,    0,    0,    0,    0,    0,    0)/sum(c((1 - pInf())^numCont() - pInf(),  1 - (1 - pInf())^numCont(), pInf()))), #S
+              c((1 - pInf())^numCont(),  0, 1 - (1 - pInf())^numCont(),    0,    0,    0,    0,    0,    0,    0,    0), #PE
+              c(0,        0,     0,    1,    0,    0,    0,    0,    0,    0,    0), #E
+              c(0,        0,     0, 0.49, 0.51,    0,    0,    0,    0,    0,    0), #Incubation1
+              c(0,        0,     0,    0, 0.49, 0.51,    0,    0,    0,    0,    0), #Incubation2
+              c(0,        0,     0,    0,    0, 0.49, 0.51,    0,    0,    0,    0), #Inf_presymptomatic
+              c(0,        0,     0,    0,    0,    0, 0.25, 0.75,    0,    0,    0), #Inf_asym_sym1
+              c(0,        0,     0,    0,    0,    0,    0, 0.25, 0.75,    0,    0), #Inf_asym_sym2
+              c(0,        0,     0,    0,    0,    0,    0,    0, 0.25, 0.75,    0), #Inf_asym_sym3
+              c(0,        0,     0,    0,    0,    0,    0,    0,    0, 0.25, 0.75), #Inf_asym_sym4
+              c(0,        0,     0,    0,    0,    0,    0,    0,    0,    0,    1)),#R
+            "Post" = rbind(
+              round_stochastic(c((1 - pInf())^numCont() - pInf(),  1 - (1 - pInf())^numCont(), pInf(),    0,    0,    0,    0,    0,    0,    0,    0)/sum(c((1 - pInf())^numCont() - pInf(),  1 - (1 - pInf())^numCont(), pInf()))), #S
+              c((1 - pInf())^numCont(),  0, 1 - (1 - pInf())^numCont(),    0,    0,    0,    0,    0,    0,    0,    0), #PE
+              c(0,        0,     0,    1,    0,    0,    0,    0,    0,    0,    0), #E
+              c(0,        0,     0, 0.49, 0.51,    0,    0,    0,    0,    0,    0), #Incubation1
+              c(0,        0,     0,    0, 0.49, 0.51,    0,    0,    0,    0,    0), #Incubation2
+              c(0,        0,     0,    0,    0, 0.49, 0.51,    0,    0,    0,    0), #Inf_presymptomatic
+              c(0,        0,     0,    0,    0,    0, 0.25, 0.75,    0,    0,    0), #Inf_asym_sym1
+              c(0,        0,     0,    0,    0,    0,    0, 0.25, 0.75,    0,    0), #Inf_asym_sym2
+              c(0,        0,     0,    0,    0,    0,    0,    0, 0.25, 0.75,    0), #Inf_asym_sym3
+              c(0,        0,     0,    0,    0,    0,    0,    0,    0, 0.25, 0.75), #Inf_asym_sym4
+              c(0,        0,     0,    0,    0,    0,    0,    0,    0,    0,    1)),#R
+            "Isolate" = rbind(
+              c(        1,     0,    0,    0,    0,    0,    0,    0,    0,    0,    0), #S
+              c(        1,     0,    0,    0,    0,    0,    0,    0,    0,    0,    0), #PE
+              c(0,        0,     0,    1,    0,    0,    0,    0,    0,    0,    0), #E
+              c(0,        0,     0, 0.49, 0.51,    0,    0,    0,    0,    0,    0), #Incubation1
+              c(0,        0,     0,    0, 0.49, 0.51,    0,    0,    0,    0,    0), #Incubation2
+              c(0,        0,     0,    0,    0, 0.49, 0.51,    0,    0,    0,    0), #Inf_presymptomatic
+              c(0,        0,     0,    0,    0,    0, 0.25, 0.75,    0,    0,    0), #Inf_asym_sym1
+              c(0,        0,     0,    0,    0,    0,    0, 0.25, 0.75,    0,    0), #Inf_asym_sym2
+              c(0,        0,     0,    0,    0,    0,    0,    0, 0.25, 0.75,    0), #Inf_asym_sym3
+              c(0,        0,     0,    0,    0,    0,    0,    0,    0, 0.25, 0.75), #Inf_asym_sym4
+              c(0,        0,     0,    0,    0,    0,    0,    0,    0,    0,    1)) #R
+          ),
+          #R_(action = "*", start.state = "*", end.state = "*", observation = "*", value)
+          reward = rbind(
+            R_("Test", 0, v = rwdTest1()),
+            R_("Post", 0, v = rwdPost1()),
+            R_("Isolate", 0, v = rwdIsolate1),
+            R_("Test", 1, v = rwdTest1()),
+            R_("Post", 1, v = rwdPost1()),
+            R_("Isolate", 1, v = rwdIsolate1),
+            R_("Test", 2, v = -100),
+            R_("Post", 2, v = -100),
+            R_("Isolate", 2, v = -100),
+            R_("Test", 3, v = rwdTest2()),
+            R_("Post", 3, v = rwdPost2),
+            R_("Isolate", 3, v = rwdIsolate2()),
+            R_("Test", 4, v = rwdTest2()),
+            R_("Post", 4, v = rwdPost2),
+            R_("Isolate", 4, v = rwdIsolate2()),
+            R_("Test", 5, v = rwdTest2()),
+            R_("Post", 5, v = rwdPost2),
+            R_("Isolate", 5, v = rwdIsolate2()),
+            R_("Test", 6, v = rwdTest2()),
+            R_("Post", 6, v = rwdPost2),
+            R_("Isolate", 6, v = rwdIsolate2()),
+            R_("Test", 7, v = rwdTest2()),
+            R_("Post", 7, v = rwdPost2),
+            R_("Isolate", 7, v = rwdIsolate2()),
+            R_("Test", 8, v = rwdTest2()),
+            R_("Post", 8, v = rwdPost2),
+            R_("Isolate", 8, v = rwdIsolate2()),
+            R_("Test", 9, v = rwdTest2()),
+            R_("Post", 9, v = rwdPost2),
+            R_("Isolate", 9, v = rwdIsolate2()),
+            R_("Test", 10, v = rwdTest1()),
+            R_("Post", 10, v = rwdPost1()),
+            R_("Isolate", 10, v = rwdIsolate1)
+          ),
+          #O_(action = "*", end.state = "*", observation = "*", probability)
+          observation_prob = list(
+            "Test" = rbind( round_stochastic(c(ObsS[1:6]/10, 0.9*pFalsePosS, 0.9 - 0.9*pFalsePosS)),
+                round_stochastic(c(ObsPE[1:6]/10, 0.9*pFalsePosS, 0.9 - 0.9*pFalsePosS)),
+                round_stochastic(c(ObsE[1:6]/10, 0.9*pPosE, 0.9 - 0.9*pPosE)),
+                round_stochastic(c(ObsInc1[1:6]/10, 0.9*pPosI, 0.9 - 0.9*pPosI)),
+                round_stochastic(c(ObsInc2[1:6]/10, 0.9*pPosI, 0.9 - 0.9*pPosI)),
+                round_stochastic(c(ObsInfP[1:6]/10, 0.9*pPosI, 0.9 - 0.9*pPosI)),
+                round_stochastic(c(ObsInfS1[1:6]/10, 0.9*pPosI, 0.9 - 0.9*pPosI)),
+                round_stochastic(c(ObsInfS2[1:6]/10, 0.9*pPosI, 0.9 - 0.9*pPosI)),
+                round_stochastic(c(ObsInfS3[1:6]/10, 0.9*pPosI, 0.9 - 0.9*pPosI)),
+                round_stochastic(c(ObsInfS4[1:6]/10, 0.9*pPosI, 0.9 - 0.9*pPosI)),
+                round_stochastic(c(ObsR[1:6]/10, 0.9*pFalsePosR, 0.9 - 0.9*pFalsePosR))),
+          "Isolate" = rbind( round_stochastic(c(ObsS[1:6]*0.9, pFalsePosS/10, 0.1 - 0.1*pFalsePosS)),
+                     round_stochastic(c(ObsPE[1:6]*0.9, pFalsePosS/10, 0.1 - 0.1*pFalsePosS)),
+                     round_stochastic(c(ObsE[1:6]*0.9, pPosE/10, 0.1 - 0.1*pPosE)),
+                     round_stochastic(c(ObsInc1[1:6]*0.9, pPosI/10, 0.1 - 0.1*pPosI)),
+                     round_stochastic(c(ObsInc2[1:6]*0.9, pPosI/10, 0.1 - 0.1*pPosI)),
+                     round_stochastic(c(ObsInfP[1:6]*0.9, pPosI/10, 0.1 - 0.1*pPosI)),
+                     round_stochastic(c(ObsInfS1[1:6]*0.9, pPosI/10, 0.1 - 0.1*pPosI)),
+                     round_stochastic(c(ObsInfS2[1:6]*0.9, pPosI/10, 0.1 - 0.1*pPosI)),
+                     round_stochastic(c(ObsInfS3[1:6]*0.9, pPosI/10, 0.1 - 0.1*pPosI)),
+                     round_stochastic(c(ObsInfS4[1:6]*0.9, pPosI/10, 0.1 - 0.1*pPosI)),
+                     round_stochastic(c(ObsR[1:6]*0.9, pFalsePosR/10, 0.1 - 0.1*pFalsePosR))),
+          #rbind(ObsS,ObsE,ObsInc1,ObsInc2, ObsInfP, ObsInfS1, ObsInfS2, ObsInfS3, ObsInfS4, ObsR),
+          "Post" = rbind( round_stochastic(c(ObsS[1:6]*0.9, pFalsePosS/10, 0.1 - 0.1*pFalsePosS)),
+                  round_stochastic(c(ObsPE[1:6]*0.9, pFalsePosS/10, 0.1 - 0.1*pFalsePosS)),
+                  round_stochastic(c(ObsE[1:6]*0.9, pPosE/10, 0.1 - 0.1*pPosE)),
+                  round_stochastic(c(ObsInc1[1:6]*0.9, pPosI/10, 0.1 - 0.1*pPosI)),
+                  round_stochastic(c(ObsInc2[1:6]*0.9, pPosI/10, 0.1 - 0.1*pPosI)),
+                  round_stochastic(c(ObsInfP[1:6]*0.9, pPosI/10, 0.1 - 0.1*pPosI)),
+                  round_stochastic(c(ObsInfS1[1:6]*0.9, pPosI/10, 0.1 - 0.1*pPosI)),
+                  round_stochastic(c(ObsInfS2[1:6]*0.9, pPosI/10, 0.1 - 0.1*pPosI)),
+                  round_stochastic(c(ObsInfS3[1:6]*0.9, pPosI/10, 0.1 - 0.1*pPosI)),
+                  round_stochastic(c(ObsInfS4[1:6]*0.9, pPosI/10, 0.1 - 0.1*pPosI)),
+                  round_stochastic(c(ObsR[1:6]*0.9, pFalsePosR/10, 0.1 - 0.1*pFalsePosR)))
+          #rbind(ObsS,ObsE,ObsInc1,ObsInc2, ObsInfP, ObsInfS1, ObsInfS2, ObsInfS3, ObsInfS4, ObsR))
+          )  
+        )
+        solve_POMDP(COVID_POMDP, digits = 3, parameter = list(fg_points = 50))
+      })   
+    })
+    disable("MakePlot")
+    enable("daysago")
+    updateSelectInput(session, "seledges", choices = c("Select observation" = ""), selected = "")
+    enable("seledges")
+    graph_result_val(NULL)
+    graph_result_val({
+    pg <- policy_graph(POMDP_result_val())
+    V(pg)$name <- vertex_attr(pg)$label
+    E(pg)$name <- paste(1:length(E(pg)), abbreviate(edge_attr(pg)$label))
+    edge_attr(pg)$label <- abbreviate(edge_attr(pg)$label)
+    vertex_attr(pg)$label <- matrix(unlist(strsplit(vertex_attr(pg)$label, "\n")), ncol = 2, byrow = TRUE)[,2] 
+    V(pg)$color <- lighten(sapply(seq(length(V(pg))), FUN = function(i)
+      grDevices::rgb(t(grDevices::col2rgb(V(pg)$pie.color[[1]])
+                       %*% V(pg)$pie[[i]])/255.001)), 0.18)
+    if (input$seledges == "") {
+      initialNode <- POMDP_result_val()$solution$initial_pg_node
+      initialNodeName <- V(pg)[initialNode]$name
+    } else {
+      initialNode <- V(pg)[input$seledges]
+      initialNodeName <- V(pg)[initialNode]$name
+    }
+    for (nod in 1:length(V(pg))) {
+      V(pg)[nod]$title <- paste(V(pg)[nod]$label, knitr::kable(cbind(belief = V(pg)$pie[[nod]][V(pg)$pie[[nod]] > 0]), digits = 3, format = "html")) }
+    pg <- make_ego_graph(pg, order = 1,
+                         nodes = initialNode, 
+                         mode = "out")[[1]]
+    rm_edg <- NULL
+    for (edg in E(pg)) {
+      if (!(tail_of(pg, edg)$name == initialNodeName)) rm_edg <- append(rm_edg, edg)
+      }
+    pg <- pg - edge(rm_edg)
+    edgelabels <- paste(ifelse(E(pg)$label == "NA", "No change during day", ifelse(E(pg)$label == "DS", "Developing Symptoms", ifelse(E(pg)$label == "PS", "Persisting Symptoms", ifelse(E(pg)$label == "WS", "Worsening Symptoms", ifelse(E(pg)$label == "LS", "Lessening Symptoms", ifelse(E(pg)$label == "PE", "Potential Exposure", ifelse(E(pg)$label == "Pos", "Positive", "Negative"))))))), " (", E(pg)$label, ")", sep = "")
+    choicesarray <- c("", head_of(pg, E(pg))$name)
+    names(choicesarray) <- c("Select observation", edgelabels)
+    if (any_multiple(pg)) {
+      pglab <- simplify(pg, remove.loops = F, remove.multiple = T, edge.attr.comb = "concat")
+      mylab <- NULL
+      for (cmbnedg in 1:length(E(pglab)$label)) {
+        mystr <- NULL
+        mystr <- paste(mystr, E(pglab)$label[[cmbnedg]][1], sep = "")
+        if (length(E(pglab)$label[[cmbnedg]]) > 1) {
+          for (edg in 2:length(E(pglab)$label[[cmbnedg]])) {
+            mystr <- paste(mystr, E(pglab)$label[[cmbnedg]][edg], sep = " or ")
+          }
+        }
+        mylab <- append(mylab, mystr)
+      }
+      choicesarray <- c("", head_of(pglab, E(pglab))$name)
+      names(choicesarray) <- c("Select observation", mylab)
+      updateSelectInput(session, "seledges", choices = choicesarray) 
+      visNetwork::visIgraph(pg, idToLabel = FALSE, smooth = smooth) %>%
+      visLegend(useGroups = FALSE, main = "Edge legend (observations)",
+                addEdges = data.frame(label = c("No change\nduring day (NA)", "Developing\nSymptoms (DS)\nPersisting\nSymptoms (PS)\nWorsening\nSymptoms (WS)\nLessening\nSymptoms (LS)", "Potential\nExposure (PE)", "Positive (Pos)\n/Negative (Neg)\ntest results"), color = 'rgba(0,0,0,0)')) %>%
+      visEdges( font = list(size = 12, vadjust = 0)) %>%
+      visNetwork::visOptions(highlightNearest = list(enabled = TRUE, degree = 0),
+                             nodesIdSelection = FALSE, ) %>%
+      visLayout(randomSeed = 123, improvedLayout = TRUE) %>%
+      visPhysics(solver = "barnesHut", barnesHut = list(gravitationalConstant = -2000)) %>%
+      visInteraction(tooltipDelay = 915, navigationButtons = FALSE, tooltipStyle = 'position: fixed;visibility:hidden;padding: 5px;white-space: nowrap;
+    font-family: cursive;font-size:18px;font-color:purple;background-color: red;')
+    } else {
+    updateSelectInput(session, "seledges", choices = choicesarray) 
+    visNetwork::visIgraph(pg, idToLabel = FALSE, smooth = smooth) %>%
+visEdges( font = list(size = 12, vadjust = 0)) %>%
+    visNetwork::visOptions(highlightNearest = list(enabled = TRUE, degree = 0),
+                           nodesIdSelection = FALSE, ) %>%
+    visLayout(randomSeed = 123, improvedLayout = TRUE) %>%
+    visPhysics(solver = "barnesHut", barnesHut = list(gravitationalConstant = -2000)) %>%
+    visInteraction(tooltipDelay = 915, navigationButtons = FALSE, tooltipStyle = 'position: fixed;visibility:hidden;padding: 5px;white-space: nowrap;
+  font-family: cursive;font-size:18px;font-color:purple;background-color: red;')
+    }
+  })
+  })
+    
+```
+
+# Rewards 
+
+Column {.sidebar data-width=370}
+-------------------------------------
+
+```{r, echo=FALSE, context="render"}
+tags$div(title = "Set reward for not restricting healthy people (susceptible or recovered)", sliderInput("RwdPost1_ui", label = "Post Healthy", min = 1, max = 100, value = 10, step = 1))
+
+tags$div(title = "Set reward for testing healthy people (susceptible or recovered)", sliderInput("RwdTest1_ui", label = "Test Healthy", min = 0, max = 10, value = 5, step = 1))
+
+tags$div(title = "Set reward for testing infected people", sliderInput("RwdTest2_ui", label = "Test Infected", min = 0, max = 10, value = 5, step = 1))
+
+tags$div(title = "Set reward for isolating infected people", sliderInput("RwdIsolate2_ui", label = "Isolate Infected", min = 1, max = 100, value = 10, step = 1))
+
+tags$div(title = "The daily probability of infection (a value that impacts the transition probabilities and initial belief)", sliderInput("pInf_ui", label = "Daily probability of infection", min = 0, max = 0.02, value = 0.0086, step = 0.0001))
+
+tags$div(title = "The daily probability of other illness (a value that impacts the transition probabilities)", sliderInput("pFalseSym_ui", label = "Daily probability of developing another illness", min = 0, max = 0.05, value = 0.02, step = 0.001))
+
+tags$div(title = "Typical number of contacts  (impacts how often Possible Exposure is observed)", sliderInput("numCont_ui", label = "Typical number of contacts", min = 5, max = 30, value = 10, step = 1))
+
+tags$div(title = "Likelihood of contact tracing (impacts how meaningful a Possible Exposure observation becomes)", sliderInput("pContTrace_ui", label = "Contact tracing effectiveness", min = 0.25, max = 0.75, value = 0.50, step = 0.05))
+
+```
+
+Row {data-height=140}
+-----------------------------------------------------------------------
+
+### Post Healthy
+
+```{r}
+
+gaugeOutput("posthealthygauge")  
+
+```
+
+### Test Healthy
+
+```{r}
+
+gaugeOutput("testhealthygauge")  
+
+```
+
+### Test Infected
+
+```{r}
+
+gaugeOutput("testinfectedgauge")  
+
+```
+
+### Isolate Infected
+
+```{r}
+
+gaugeOutput("isolateinfectedgauge")
+
+```
+
+Row {data-height=140}
+-----------------------------------------------------------------------
+
+### Daily probability of infection 
+
+```{r}
+
+gaugeOutput("inf")  
+
+```
+
+### Daily probability of false symptoms
+
+```{r}
+
+gaugeOutput("false")  
+
+```
+
+Row {data-height=140}
+-----------------------------------------------------------------------
+
+### Typical number of contacts
+
+```{r}
+
+gaugeOutput("numCont")  
+
+```
+
+### Contact tracing effectiveness
+
+```{r}
+
+gaugeOutput("pContTrace")  
+
+```
