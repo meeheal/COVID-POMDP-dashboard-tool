@@ -5,18 +5,18 @@ require(visNetwork)
 require(colorspace)
 
 #It is assumed COVID is going around (there is a breakout)
-numCont <- 18
+numCont <- 6
 
-pContTrace <- 0.65
-pFalseSym <- 0.03
+pContTrace <- 0.99
+pFalseSym <- 0.01
 
 
-rwdPostInfected <- -15
-rwdIsolateInfected <- 8
-rwdTest <- -1.5
-rwdPostHealthy <- 7
-rwdIsolateHealthy <- -7
-pInf <- 0.013
+rwdPostInfected <- -25
+rwdIsolateInfected <- 5
+rwdTest <- -0.25
+rwdPostHealthy <- 10
+rwdIsolateHealthy <- -1
+pInf <- 0.02
 
 
 pPosE <- 0.6  #what probability do you have a positive Test result for someone who has 
@@ -215,7 +215,7 @@ COVID_POMDP_P6 <- POMDP(
   transition_prob = list(
     "Test" = rbind(
       c(        1,     0,    0,    0,    0,    0,    0,    0,    0,    0,    0), #S
-      c(1 - 3.5/(numCont - 1),  0, 3.5/(numCont - 1),    0,    0,    0,    0,    0,    0,    0,    0), #PE
+      c(1 - 1/(numCont - 1),  0, 1/(numCont - 1),    0,    0,    0,    0,    0,    0,    0,    0), #PE
       c(0,        0,     0,    1,    0,    0,    0,    0,    0,    0,    0), #E
       c(0,        0,     0, 0.49, 0.51,    0,    0,    0,    0,    0,    0), #Incubation1
       c(0,        0,     0,    0, 0.49, 0.51,    0,    0,    0,    0,    0), #Incubation2
@@ -228,7 +228,7 @@ COVID_POMDP_P6 <- POMDP(
     
     "Post" = rbind(
       round_stochastic(c(1 - (1 - (1 - pInf)^numCont)*pContTrace - pInf*(1 - pContTrace),  (1 - (1 - pInf)^numCont)*pContTrace, (1 - (1 - pInf)^numCont)*(1 - pContTrace),    0,    0,    0,    0,    0,    0,    0,    0)/sum(c(1 - (1 - (1 - pInf)^numCont)*pContTrace - pInf*(1 - pContTrace),  (1 - (1 - pInf)^numCont)*pContTrace, (1 - (1 - pInf)^numCont)*(1 - pContTrace),    0,    0,    0,    0,    0,    0,    0,    0))), #S
-      c(1 - 3.5/(numCont - 1),  0, 3.5/(numCont - 1),    0,    0,    0,    0,    0,    0,    0,    0), #PE
+      c(1 - 1/(numCont - 1),  0, 1/(numCont - 1),    0,    0,    0,    0,    0,    0,    0,    0), #PE
       c(0,        0,     0,    1,    0,    0,    0,    0,    0,    0,    0), #E
       c(0,        0,     0, 0.49, 0.51,    0,    0,    0,    0,    0,    0), #Incubation1
       c(0,        0,     0,    0, 0.49, 0.51,    0,    0,    0,    0,    0), #Incubation2
@@ -241,7 +241,7 @@ COVID_POMDP_P6 <- POMDP(
     
     "Isolate" = rbind(
       c(        1,     0,    0,    0,    0,    0,    0,    0,    0,    0,    0), #S
-      c(1 - 3.5/(numCont - 1),  0, 3.5/(numCont - 1),    0,    0,    0,    0,    0,    0,    0,    0), #PE
+      c(1 - 1/(numCont - 1),  0, 1/(numCont - 1),    0,    0,    0,    0,    0,    0,    0,    0), #PE
       c(0,        0,     0,    1,    0,    0,    0,    0,    0,    0,    0), #E
       c(0,        0,     0, 0.49, 0.51,    0,    0,    0,    0,    0,    0), #Incubation1
       c(0,        0,     0,    0, 0.49, 0.51,    0,    0,    0,    0,    0), #Incubation2
