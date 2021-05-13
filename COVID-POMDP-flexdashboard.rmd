@@ -541,7 +541,7 @@ N <- 23
           transition_prob = list(
             "Test" = rbind(
               c(        1,     0,    0,    0,    0,    0,    0,    0,    0,    0,    0), #S
-              c(1 - 3.5/(numCont() - 1),  0, 3.5/(numCont() - 1),    0,    0,    0,    0,    0,    0,    0,    0), #PE
+              c(1 - 1/(numCont() - 1),  0, 1/(numCont() - 1),    0,    0,    0,    0,    0,    0,    0,    0), #PE
               c(0,        0,     0,    1,    0,    0,    0,    0,    0,    0,    0), #E
               c(0,        0,     0, 0.49, 0.51,    0,    0,    0,    0,    0,    0), #Incubation1
               c(0,        0,     0,    0, 0.49, 0.51,    0,    0,    0,    0,    0), #Incubation2
@@ -554,7 +554,7 @@ N <- 23
               
             "Post" = rbind(
               round_stochastic(c(1 - (1 - (1 - pInf())^numCont())*pContTrace() - pInf()*(1 - pContTrace()),  (1 - (1 - pInf())^numCont())*pContTrace(), (1 - (1 - pInf())^numCont())*(1 - pContTrace()),    0,    0,    0,    0,    0,    0,    0,    0)/sum(c(1 - (1 - (1 - pInf())^numCont())*pContTrace() - pInf()*(1 - pContTrace()),  (1 - (1 - pInf())^numCont())*pContTrace(), (1 - (1 - pInf())^numCont())*(1 - pContTrace()),    0,    0,    0,    0,    0,    0,    0,    0))), #S
-              c(1 - 3.5/(numCont() - 1),  0, 3.5/(numCont() - 1),    0,    0,    0,    0,    0,    0,    0,    0), #PE
+              c(1 - 1/(numCont() - 1),  0, 1/(numCont() - 1),    0,    0,    0,    0,    0,    0,    0,    0), #PE
               c(0,        0,     0,    1,    0,    0,    0,    0,    0,    0,    0), #E
               c(0,        0,     0, 0.49, 0.51,    0,    0,    0,    0,    0,    0), #Incubation1
               c(0,        0,     0,    0, 0.49, 0.51,    0,    0,    0,    0,    0), #Incubation2
@@ -567,7 +567,7 @@ N <- 23
               
             "Isolate" = rbind(
               c(        1,     0,    0,    0,    0,    0,    0,    0,    0,    0,    0), #S
-              c(1 - 3.5/(numCont() - 1),  0, 3.5/(numCont() - 1),    0,    0,    0,    0,    0,    0,    0,    0), #PE
+              c(1 - 1/(numCont() - 1),  0, 1/(numCont() - 1),    0,    0,    0,    0,    0,    0,    0,    0), #PE
               c(0,        0,     0,    1,    0,    0,    0,    0,    0,    0,    0), #E
               c(0,        0,     0, 0.49, 0.51,    0,    0,    0,    0,    0,    0), #Incubation1
               c(0,        0,     0,    0, 0.49, 0.51,    0,    0,    0,    0,    0), #Incubation2
