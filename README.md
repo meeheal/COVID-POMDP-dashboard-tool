@@ -18,6 +18,21 @@ The possible actions are Post, Test or Isolate. Post means do nothing, Test mean
 Full details are included in the draft DRDC-RDDC publication: Uncertainty decision support for COVID-19 community spread with partially observable Markov decision process:
 A proof-of-concept application with public health and military applications
 
+Code used in this work:
+source the r script in this repository.
+sol <- solve_POMDP(COVID_POMDP_P6, digits = 3, parameter = list(fg_points = 50))
+sim <- simulate_POMDP(sol, n = 50, horizon = 25, verbose = TRUE)
+
+healthydays <- attr(sim, "state_cnt")[, 1]
+potentially_exposed_days <- attr(sim, "state_cnt")[, 2]
+exposeddays <- attr(sim, "state_cnt")[, 3]
+incubatingdays <- attr(sim, "state_cnt")[, 3] + attr(sim, "state_cnt")[, 4] + attr(sim, "state_cnt")[, 5]
+infectiousdays <- attr(sim, "state_cnt")[, 6] + attr(sim, "state_cnt")[, 7] + attr(sim, "state_cnt")[, 8] + attr(sim, "state_cnt")[, 9] + attr(sim, "state_cnt")[, 10]
+mydata <- data.frame(healthydays, potentially_exposed_days, incubatingdays, infectiousdays)
+write.csv(mydata)
+write.csv(attr(sim, "action_cnt"))
+
+FYI 
 sessionInfo()
 R version 4.0.2 (2020-06-22)
 Platform: x86_64-w64-mingw32/x64 (64-bit)
